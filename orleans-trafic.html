@@ -3,35 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trafic Orléans Métropole</title>
 
-<link rel="stylesheet"
- href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<title>Trafic routier — Orléans Métropole</title>
+
+<link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+>
 
 <style>
-html,body{
-    height:100%;
-    margin:0
-}
-#map{
-    height:100%
+html, body, #map {
+    height: 100%;
+    margin: 0;
 }
 
-#panel{
-    position:absolute;
-    top:10px;
-    left:10px;
-    z-index:1000;
+#panel {
+    position: absolute;
+    z-index: 1000;
+    top: 10px;
+    left: 10px;
+    width: 250px;
+    padding: 12px;
     background: white;
-    padding:12px;
-    border-radius:8px;
-    box-shadow:0 2px 10px rgba(0,0,0,.2);
-    font-family:sans-serif;
-    width:230px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px #0003;
+    font-family: sans-serif;
 }
 
-input,select{
-    width:100%
+#panel select,
+#panel input {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 5px;
+    margin-bottom: 10px;
+}
+
+.legend {
+    margin-top: 10px;
+    font-size: 12px;
+}
+
+.legend div {
+    margin: 3px 0;
+}
+
+.legend span {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 5px;
+    vertical-align: middle;
 }
 </style>
 </head>
@@ -40,21 +61,36 @@ input,select{
 
 <div id="panel">
 
-<b>Trafic Orléans</b><br><br>
+    <strong>Trafic routier</strong><br>
+    Orléans Métropole
 
-<label>Année</label>
+    <label for="year">Année</label>
 
-<select id="year">
-<option>2026</option>
-<option>2025</option>
-<option>2024</option>
-<option selected>2026</option>
-</select>
+    <select id="year">
+        <option value="2023">2023</option>
+        <option value="2024">2024</option>
+        <option value="2025">2025</option>
+        <option value="2026">2026*</option>
+    </select>
 
-<br><br>
+    <label for="search">Compteur</label>
 
-<label>Recherche</label>
-<input id="search" placeholder="George V">
+    <input
+        id="search"
+        type="search"
+        placeholder="George V, Joffre...">
+
+    <div class="legend">
+        <div><span style="background:#2166ac"></span>&lt; 5 000</div>
+        <div><span style="background:#67a9cf"></span>5 000–10 000</div>
+        <div><span style="background:#fddbc7"></span>10 000–20 000</div>
+        <div><span style="background:#ef8a62"></span>20 000–30 000</div>
+        <div><span style="background:#b2182b"></span>&gt; 30 000</div>
+    </div>
+
+    <small>
+        * 2026 : données provisoires / année incomplète
+    </small>
 
 </div>
 
@@ -64,81 +100,230 @@ input,select{
 
 <script>
 
-const DATASET="beta-indicateurs-annuels-de-trafic-routier-aux-points-de-comptage-copie";
+const DATASET =
+    "beta-indicateurs-annuels-de-trafic-routier-aux-points-de-comptage-copie";
 
-const map=L.map("map").setView([47.902,1.909],13);
+const API =
+    "https://data.orleans-metropole.fr/api/explore/v2.1/catalog/datasets/"
+    + DATASET
+    + "/records";
+
+const map = L.map("map").setView([47.903, 1.91], 13);
 
 L.tileLayer(
-"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-{attribution:"© OSM"}
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+        attribution: "&copy; OpenStreetMap contributors"
+    }
 ).addTo(map);
 
-let layer;
+let layer = L.layerGroup().addTo(map);
 
-function color(tmja){
 
-return tmja>45000?"#67000d":
-tmja>30000?"#cb181d":
-tmja>20000?"#ef3b2c":
-tmja>10000?"#fb6a4a":
-tmja>5000?"#fc9272":
-"#fcbba1";
+function color(tmja) {
+    if (tmja < 5000)  return "#2166ac";
+    if (tmja < 10000) return "#67a9cf";
+    if (tmja < 20000) return "#fddbc7";
+    if (tmja < 30000) return "#ef8a62";
 
+    return "#b2182b";
 }
 
-async function load(){
-    const year=document.getElementById("year").value;
 
-    const url=
-    `https://data.orleans-metropole.fr/api/explore/v2.1/catalog/datasets/${DATASET}/records?where=annee=${year}&limit=100`;
+function radius(tmja) {
 
-    const data=await fetch(url).then(r=>r.json());
+    // Rayon logarithmique : évite que les gros compteurs
+    // écrasent complètement les petits.
+    return Math.max(
+        5,
+        Math.min(25, 3 + Math.sqrt(tmja) / 8)
+    );
+}
 
-    if(layer)
-        layer.remove();
 
-    layer=L.layerGroup().addTo(map);
+async function load() {
 
-    const search=document.getElementById("search").value.toLowerCase();
+    const year =
+        document.getElementById("year").value;
 
-    data.results.forEach(p=>{
-        const name=(p.nom_point||"").toLowerCase();
+    const search =
+        document.getElementById("search").value
+            .trim()
+            .toLowerCase();
 
-        if(search && !name.includes(search))
+    const where =
+        `annee=${year}`;
+
+    const url =
+        API
+        + "?where=" + encodeURIComponent(where)
+        + "&limit=100";
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(
+            `Erreur API HTTP ${response.status}`
+        );
+    }
+
+    const data = await response.json();
+
+    layer.clearLayers();
+
+    let displayed = 0;
+
+    data.results.forEach(p => {
+
+        /*
+         * Coordonnées réelles de l'API :
+         *
+         * latitude
+         * longitude
+         */
+
+        if (
+            typeof p.latitude !== "number" ||
+            typeof p.longitude !== "number"
+        ) {
             return;
-
-        const tmja=p.tmja||0;
-
-        const marker=L.circleMarker(
-        [p.geometry.lat,p.geometry.lon],
-        {
-            radius:Math.max(5,Math.sqrt(tmja)/7),
-            color:color(tmja),
-            fillColor:color(tmja),
-            fillOpacity:.8,
-            weight:1
         }
+
+        const name =
+            p.point_de_comptage || "";
+
+        if (
+            search &&
+            !name.toLowerCase().includes(search)
+        ) {
+            return;
+        }
+
+        const tmja =
+            Number(
+                p.trafic_moyen_journalier_annuel_vehicules_par_jour
+            ) || 0;
+
+        const marker =
+            L.circleMarker(
+                [
+                    p.latitude,
+                    p.longitude
+                ],
+                {
+                    radius: radius(tmja),
+                    color: color(tmja),
+                    fillColor: color(tmja),
+                    fillOpacity: 0.75,
+                    weight: 1
+                }
+            );
+
+
+        let popup = `
+            <strong>${name}</strong><br>
+            <hr>
+
+            <b>Année :</b> ${p.annee}<br>
+
+            <b>TMJA :</b>
+            ${tmja.toLocaleString("fr-FR")}
+            véh./jour<br>
+        `;
+
+
+        if (
+            p.trafic_moyen_journalier_jours_ouvres_vehicules_par_jour
+            !== null
+        ) {
+
+            popup += `
+                <b>TMJO :</b>
+                ${Number(
+                    p.trafic_moyen_journalier_jours_ouvres_vehicules_par_jour
+                ).toLocaleString("fr-FR")}
+                véh./jour<br>
+            `;
+        }
+
+
+        if (
+            p.heure_de_pointe_du_matin_jours_ouvres
+        ) {
+
+            popup += `
+                <br>
+                <b>Pointe matin</b><br>
+                ${p.heure_de_pointe_du_matin_jours_ouvres}
+                :
+                ${Number(
+                    p.debit_pic_matin_jours_ouvres_vehicules_par_heure
+                ).toLocaleString("fr-FR")}
+                véh./h
+            `;
+        }
+
+
+        if (
+            p.heure_de_pointe_du_soir_jours_ouvres
+        ) {
+
+            popup += `
+                <br>
+                <b>Pointe soir</b><br>
+                ${p.heure_de_pointe_du_soir_jours_ouvres}
+                :
+                ${Number(
+                    p.debit_pic_soir_jours_ouvres_vehicules_par_heure
+                ).toLocaleString("fr-FR")}
+                véh./h
+            `;
+        }
+
+
+        popup += `
+            <br><br>
+            <small>
+                ID : ${p.pmc_id}<br>
+                ${p.periode_debut}
+                → ${p.periode_fin}
+            </small>
+        `;
+
+
+        marker
+            .bindPopup(popup)
+            .addTo(layer);
+
+        displayed++;
+    });
+
+
+    console.log(
+        `${displayed} compteurs affichés pour ${year}`
+    );
+}
+
+
+document
+    .getElementById("year")
+    .addEventListener("change", load);
+
+document
+    .getElementById("search")
+    .addEventListener("input", load);
+
+
+load().catch(error => {
+
+    console.error(error);
+
+    alert(
+        "Impossible de charger les données :\n"
+        + error.message
     );
 
-    marker.bindPopup(`
-        <b>${p.nom_point}</b><br>
-        Année : ${p.annee}<br>
-        TMJA : ${tmja.toLocaleString()} véh/j<br>
-        TMJO : ${(p.tmjo||0).toLocaleString()}<br>
-        Volume annuel : ${(p.volume_annuel||0).toLocaleString()}<br>
-        Pointe matin : ${p.pointe_matin||"-"} (${p.debit_pointe_matin||"-"} véh/h)<br>
-        Pointe soir : ${p.pointe_soir||"-"} (${p.debit_pointe_soir||"-"} véh/h)
-    `);
-
-    marker.addTo(layer);
-
-    });
-}
-
-document.getElementById("year").onchange=load;
-document.getElementById("search").oninput=load;
-
-load();
+});
 
 </script>
 
