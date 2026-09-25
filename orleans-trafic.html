@@ -113,7 +113,8 @@ const map = L.map("map").setView([47.903, 1.91], 13);
 L.tileLayer(
     "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     {
-        attribution: "&copy; OpenStreetMap contributors"
+        attribution: "&copy; OpenStreetMap contributors",
+        opacity: 0.75 
     }
 ).addTo(map);
 
